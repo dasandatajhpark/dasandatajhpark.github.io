@@ -1,14 +1,13 @@
 #!/bin/bash
 
-echo "=============================================================================================================================================================="
-printf "%-3s | %-20s | %-45s | %-16s | %-5s | %-9s | %-7s | %-7s | %-7s\n" "GPU" "Physical Slot Name" "GPU Name" "Bus-Id" "NUMA" "PCIe BW" "Temp(C)" "Fan(%)" "Util(%)"
-echo "--------------------------------------------------------------------------------------------------------------------------------------------------------------"
+echo "=========================================================================================================================================================================="
+printf "%-3s | %-20s | %-45s | %-16s | %-5s | %-19s | %-7s | %-7s | %-7s\n" "GPU" "Physical Slot Name" "GPU Name" "Bus-Id" "NUMA" "PCIe BW (Cur/Max)" "Temp(C)" "Fan(%)" "Util(%)"
+echo "--------------------------------------------------------------------------------------------------------------------------------------------------------------------------"
 
-# 에러를 유발하던 2>/dev/null 완벽하게 멸종 완료!
 dmi_info=$(dmidecode -t 9)
 
-# pcie.link.gen.current, pcie.link.width.current 옵션 추가
-nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilization.gpu,pcie.link.gen.current,pcie.link.width.current --format=csv,noheader | while IFS=',' read -r index bus_id name temp fan util pcie_gen pcie_width; do
+# pcie.link.gen.max, pcie.link.width.max 옵션 추가
+nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilization.gpu,pcie.link.gen.current,pcie.link.width.current,pcie.link.gen.max,pcie.link.width.max --format=csv,noheader | while IFS=',' read -r index bus_id name temp fan util pcie_g_cur pcie_w_cur pcie_g_max pcie_w_max; do
     index=$(echo "$index" | xargs)
     bus_id=$(echo "$bus_id" | xargs | tr '[:upper:]' '[:lower:]')
     name=$(echo "$name" | xargs)
@@ -24,18 +23,20 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
         util="N/A"
     fi
     
-    # PCIe 배속 포맷팅 (예: Gen4 x16)
-    pcie_gen=$(echo "$pcie_gen" | xargs)
-    pcie_width=$(echo "$pcie_width" | xargs)
-    if [[ -z "$pcie_gen" || "$pcie_gen" == "[Not Supported]" ]]; then
+    # PCIe 배속 현재값과 최대값 동시 표기 (예: Gen1(4) x16(16))
+    pcie_g_cur=$(echo "$pcie_g_cur" | xargs)
+    pcie_w_cur=$(echo "$pcie_w_cur" | xargs)
+    pcie_g_max=$(echo "$pcie_g_max" | xargs)
+    pcie_w_max=$(echo "$pcie_w_max" | xargs)
+    
+    if [[ -z "$pcie_g_cur" || "$pcie_g_cur" == "[Not Supported]" ]]; then
         pcie_bw="N/A"
     else
-        pcie_bw="Gen${pcie_gen} x${pcie_width}"
+        pcie_bw="Gen${pcie_g_cur}(${pcie_g_max}) x${pcie_w_cur}(${pcie_w_max})"
     fi
     
     short_bus_id=$(echo "$bus_id" | sed 's/^00000000:/0000:/')
     
-    # NUMA Node 확인
     numa_file="/sys/bus/pci/devices/${short_bus_id}/numa_node"
     numa="N/A"
     if [ -f "$numa_file" ]; then
@@ -48,7 +49,6 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
     slot=""
     current_dev="$short_bus_id"
     
-    # 1순위: dmidecode 매칭
     while [ -n "$current_dev" ]; do
         dmi_slot=$(echo "$dmi_info" | awk -v bus="$current_dev" '
             /Designation:/ { des=$0; sub(/^[ \t]+Designation: /, "", des) }
@@ -77,7 +77,6 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
         fi
     done
 
-    # 2순위: sysfs 가상 슬롯 확인
     if [ -z "$slot" ]; then
         for addr_file in /sys/bus/pci/slots/*/address; do
             if [ -f "$addr_file" ]; then
@@ -93,12 +92,11 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
         done
     fi
     
-    # 3순위: 더미 BIOS(ff00:ff) 장비를 위한 강제 인덱스 매칭
     if [ -z "$slot" ]; then
         fallback_slot=$((index + 1))
         slot="PCIE$fallback_slot (Idx-Match)"
     fi
 
-    printf "%-3s | %-20s | %-45s | %-16s | %-5s | %-9s | %-7s | %-7s | %-7s\n" "$index" "$slot" "$name" "$bus_id" "$numa" "$pcie_bw" "$temp" "$fan" "$util"
+    printf "%-3s | %-20s | %-45s | %-16s | %-5s | %-19s | %-7s | %-7s | %-7s\n" "$index" "$slot" "$name" "$bus_id" "$numa" "$pcie_bw" "$temp" "$fan" "$util"
 done
-echo "=============================================================================================================================================================="
+echo "=========================================================================================================================================================================="
