@@ -51,9 +51,9 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
         fi
     done
 
-    # 최후의 sysfs 폴더 확인
+    # 최후의 sysfs 폴더 확인 (에러 유발했던 2>/dev/null 확실히 제거함!)
     if [ -z "$slot" ]; then
-        for addr_file in /sys/bus/pci/slots/*/address 2>/dev/null; do
+        for addr_file in /sys/bus/pci/slots/*/address; do
             if [ -f "$addr_file" ]; then
                 slot_addr=$(cat "$addr_file")
                 if [[ "$short_bus_id" == *"$slot_addr"* ]]; then
