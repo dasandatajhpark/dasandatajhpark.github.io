@@ -1,8 +1,11 @@
 #!/bin/bash
 
-echo "======================================================================================"
+echo "=========================================================================================="
 printf "%-5s | %-20s | %-25s | %-20s\n" "GPU" "Physical Slot Name" "GPU Name" "Bus-Id"
-echo "--------------------------------------------------------------------------------------"
+echo "------------------------------------------------------------------------------------------"
+
+# dmidecode 정보를 한 번만 불러와서 저장 (속도 향상 및 root 권한 체크)
+dmi_info=$(dmidecode -t 9 2>/dev/null)
 
 nvidia-smi --query-gpu=index,pci.bus_id,name --format=csv,noheader | while IFS=',' read -r index bus_id name; do
     index=$(echo "$index" | xargs)
@@ -11,37 +14,55 @@ nvidia-smi --query-gpu=index,pci.bus_id,name --format=csv,noheader | while IFS='
     short_bus_id=$(echo "$bus_id" | sed 's/^00000000:/0000:/')
     
     slot=""
-
-    # 1순위: dmidecode를 이용해 메인보드에 등록된 '물리적 슬롯 이름' 추출 (root 권한 필요)
-    if command -v dmidecode &> /dev/null; then
-        dmi_slot=$(dmidecode -t 9 2>/dev/null | awk -v bus="$short_bus_id" '
+    current_dev="$short_bus_id"
+    
+    # [핵심 로직] PCIe 트리를 거슬러 올라가며 dmidecode와 일치하는 부모 슬롯 찾기
+    while [ -n "$current_dev" ]; do
+        # 현재 장치 주소가 dmidecode에 있는지 확인
+        dmi_slot=$(echo "$dmi_info" | awk -v bus="$current_dev" '
             /Designation:/ { des=$0; sub(/^[ \t]+Designation: /, "", des) }
             /Bus Address:/ && $0 ~ bus { print des }
         ' | head -n 1)
         
         if [ -n "$dmi_slot" ]; then
             slot="$dmi_slot"
+            break
         fi
-    fi
+        
+        # 못 찾았으면 sysfs를 이용해 한 단계 위(부모 브릿지)로 이동
+        dev_path="/sys/bus/pci/devices/$current_dev"
+        if [ -e "$dev_path/.." ]; then
+            parent_dev=$(basename $(readlink -f "$dev_path/.."))
+            # 최상위 루트 버스에 도달하면 탐색 중단
+            if [[ ! "$parent_dev" =~ ^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]$ ]]; then
+                break
+            fi
+            current_dev="$parent_dev"
+        else
+            break
+        fi
+    done
 
-    # 2순위: dmidecode로 못 찾았거나 권한이 없을 경우 기존 sysfs 방식 사용 (255-1 등)
+    # 위 방법으로도 못 찾았을 경우 최후의 sysfs 폴더 확인 (단, 255-* 같은 가상 슬롯은 철저히 무시)
     if [ -z "$slot" ]; then
         for addr_file in /sys/bus/pci/slots/*/address; do
             if [ -f "$addr_file" ]; then
                 slot_addr=$(cat "$addr_file")
                 if [[ "$short_bus_id" == *"$slot_addr"* ]]; then
-                    slot=$(basename $(dirname "$addr_file"))
-                    break
+                    found_slot=$(basename $(dirname "$addr_file"))
+                    if [[ ! "$found_slot" == 255-* ]]; then
+                        slot="Slot $found_slot"
+                        break
+                    fi
                 fi
             fi
         done
     fi
     
-    # 3순위: 그래도 없으면 예외 처리
     if [ -z "$slot" ]; then
-        slot="N/A (BIOS/HGX 확인)"
+        slot="N/A (Check BIOS/Topology)"
     fi
 
     printf "%-5s | %-20s | %-25s | %-20s\n" "$index" "$slot" "$name" "$bus_id"
 done
-echo "======================================================================================"
+echo "=========================================================================================="
