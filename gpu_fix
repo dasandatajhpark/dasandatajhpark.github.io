@@ -1,0 +1,84 @@
+#!/bin/bash
+
+echo "========================================================================================================================================"
+printf "%-3s | %-20s | %-45s | %-16s | %-7s | %-7s | %-7s\n" "GPU" "Physical Slot Name" "GPU Name" "Bus-Id" "Temp(C)" "Fan(%)" "Util(%)"
+echo "----------------------------------------------------------------------------------------------------------------------------------------"
+
+# 여기 있는 2>/dev/null은 정상입니다.
+dmi_info=$(dmidecode -t 9 2>/dev/null)
+
+nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilization.gpu --format=csv,noheader | while IFS=',' read -r index bus_id name temp fan util; do
+    index=$(echo "$index" | xargs)
+    bus_id=$(echo "$bus_id" | xargs | tr '[:upper:]' '[:lower:]')
+    name=$(echo "$name" | xargs)
+    temp=$(echo "$temp" | xargs)
+    
+    # Fan 칸의 [N/A] 등 대괄호 및 기호 완벽 제거
+    fan=$(echo "$fan" | xargs | tr -d ' %[]')
+    if [[ "$fan" == "NotSupported" || "$fan" == "N/A" || -z "$fan" ]]; then
+        fan="N/A"
+    fi
+    
+    # Util 칸의 % 및 대괄호 완벽 제거
+    util=$(echo "$util" | xargs | tr -d ' %[]')
+    if [[ -z "$util" || "$util" == "N/A" ]]; then
+        util="N/A"
+    fi
+    
+    short_bus_id=$(echo "$bus_id" | sed 's/^00000000:/0000:/')
+    
+    slot=""
+    current_dev="$short_bus_id"
+    
+    # PCIe 트리 거슬러 올라가기 (대소문자 완벽 무시 매칭 추가)
+    while [ -n "$current_dev" ]; do
+        dmi_slot=$(echo "$dmi_info" | awk -v bus="$current_dev" '
+            /Designation:/ { des=$0; sub(/^[ \t]+Designation: /, "", des) }
+            /Bus Address:/ {
+                addr=$NF
+                if (tolower(addr) == tolower(bus) || tolower(addr) ~ tolower(bus)) {
+                    print des
+                }
+            }
+        ' | head -n 1)
+        
+        if [ -n "$dmi_slot" ]; then
+            slot="$dmi_slot"
+            break
+        fi
+        
+        dev_path="/sys/bus/pci/devices/$current_dev"
+        if [ -e "$dev_path/.." ]; then
+            parent_dev=$(basename $(readlink -f "$dev_path/.."))
+            if [[ ! "$parent_dev" =~ ^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]$ ]]; then
+                break
+            fi
+            current_dev="$parent_dev"
+        else
+            break
+        fi
+    done
+
+    # dmidecode 매칭 완전 실패 시 (문제가 되었던 2>/dev/null을 확실히 제거했습니다!)
+    if [ -z "$slot" ]; then
+        for addr_file in /sys/bus/pci/slots/*/address; do
+            if [ -f "$addr_file" ]; then
+                slot_addr=$(cat "$addr_file")
+                if [[ "$short_bus_id" == *"$slot_addr"* ]]; then
+                    found_slot=$(basename $(dirname "$addr_file"))
+                    if [[ ! "$found_slot" == 255-* ]]; then
+                        slot="V-Slot $found_slot (PLX)"
+                        break
+                    fi
+                fi
+            fi
+        done
+    fi
+    
+    if [ -z "$slot" ]; then
+        slot="N/A (Check BIOS)"
+    fi
+
+    printf "%-3s | %-20s | %-45s | %-16s | %-7s | %-7s | %-7s\n" "$index" "$slot" "$name" "$bus_id" "$temp" "$fan" "$util"
+done
+echo "========================================================================================================================================"
