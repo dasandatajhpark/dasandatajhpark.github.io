@@ -1,10 +1,9 @@
 #!/bin/bash
 
-echo "========================================================================================================================================"
-printf "%-3s | %-20s | %-45s | %-16s | %-7s | %-7s | %-7s\n" "GPU" "Physical Slot Name" "GPU Name" "Bus-Id" "Temp(C)" "Fan(%)" "Util(%)"
-echo "----------------------------------------------------------------------------------------------------------------------------------------"
+echo "==================================================================================================================================================="
+printf "%-3s | %-20s | %-45s | %-16s | %-5s | %-7s | %-7s | %-7s\n" "GPU" "Physical Slot Name" "GPU Name" "Bus-Id" "NUMA" "Temp(C)" "Fan(%)" "Util(%)"
+echo "---------------------------------------------------------------------------------------------------------------------------------------------------"
 
-# 여기 있는 2>/dev/null은 정상입니다.
 dmi_info=$(dmidecode -t 9 2>/dev/null)
 
 nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilization.gpu --format=csv,noheader | while IFS=',' read -r index bus_id name temp fan util; do
@@ -13,13 +12,11 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
     name=$(echo "$name" | xargs)
     temp=$(echo "$temp" | xargs)
     
-    # Fan 칸의 [N/A] 등 대괄호 및 기호 완벽 제거
     fan=$(echo "$fan" | xargs | tr -d ' %[]')
     if [[ "$fan" == "NotSupported" || "$fan" == "N/A" || -z "$fan" ]]; then
         fan="N/A"
     fi
     
-    # Util 칸의 % 및 대괄호 완벽 제거
     util=$(echo "$util" | xargs | tr -d ' %[]')
     if [[ -z "$util" || "$util" == "N/A" ]]; then
         util="N/A"
@@ -27,10 +24,20 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
     
     short_bus_id=$(echo "$bus_id" | sed 's/^00000000:/0000:/')
     
+    # [추가됨] NUMA Node(연결된 CPU) 확인 로직
+    numa_file="/sys/bus/pci/devices/${short_bus_id}/numa_node"
+    numa="N/A"
+    if [ -f "$numa_file" ]; then
+        numa_val=$(cat "$numa_file")
+        # -1은 NUMA가 없거나 할당되지 않음을 의미함
+        if [ "$numa_val" != "-1" ]; then
+            numa="$numa_val"
+        fi
+    fi
+
     slot=""
     current_dev="$short_bus_id"
     
-    # PCIe 트리 거슬러 올라가기 (대소문자 완벽 무시 매칭 추가)
     while [ -n "$current_dev" ]; do
         dmi_slot=$(echo "$dmi_info" | awk -v bus="$current_dev" '
             /Designation:/ { des=$0; sub(/^[ \t]+Designation: /, "", des) }
@@ -59,7 +66,6 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
         fi
     done
 
-    # dmidecode 매칭 완전 실패 시 (문제가 되었던 2>/dev/null을 확실히 제거했습니다!)
     if [ -z "$slot" ]; then
         for addr_file in /sys/bus/pci/slots/*/address; do
             if [ -f "$addr_file" ]; then
@@ -79,6 +85,6 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
         slot="N/A (Check BIOS)"
     fi
 
-    printf "%-3s | %-20s | %-45s | %-16s | %-7s | %-7s | %-7s\n" "$index" "$slot" "$name" "$bus_id" "$temp" "$fan" "$util"
+    printf "%-3s | %-20s | %-45s | %-16s | %-5s | %-7s | %-7s | %-7s\n" "$index" "$slot" "$name" "$bus_id" "$numa" "$temp" "$fan" "$util"
 done
-echo "========================================================================================================================================"
+echo "==================================================================================================================================================="
