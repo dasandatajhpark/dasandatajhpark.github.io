@@ -1,36 +1,65 @@
 #!/bin/bash
 
-echo "====================================================================================================================="
-printf "%-3s | %-20s | %-22s | %-16s | %-7s | %-7s | %-7s\n" "GPU" "Physical Slot Name" "GPU Name" "Bus-Id" "Temp(C)" "Fan(%)" "Util(%)"
-echo "---------------------------------------------------------------------------------------------------------------------"
+echo "=================================================================="
+echo "                   GPU HARDWARE TOPOLOGY REPORT                   "
+echo "=================================================================="
 
-# dmidecode 정보를 한 번만 불러와서 저장 (속도 향상 및 root 권한 체크)
-dmi_info=$(dmidecode -t 9 2>/dev/null)
+dmi_info=$(dmidecode -t 9)
 
-# utilization.gpu 옵션 추가
-nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilization.gpu --format=csv,noheader | while IFS=',' read -r index bus_id name temp fan util; do
+nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilization.gpu,pcie.link.gen.current,pcie.link.width.current,pcie.link.gen.max,pcie.link.width.max --format=csv,noheader | while IFS=',' read -r index bus_id name temp fan util pcie_g_cur pcie_w_cur pcie_g_max pcie_w_max; do
     index=$(echo "$index" | xargs)
     bus_id=$(echo "$bus_id" | xargs | tr '[:upper:]' '[:lower:]')
     name=$(echo "$name" | xargs)
     temp=$(echo "$temp" | xargs)
-    fan=$(echo "$fan" | xargs)
     
-    # util 값에서 % 기호와 공백을 제거하여 숫자만 남김
-    util=$(echo "$util" | xargs | tr -d ' %')
-    if [[ -z "$util" ]]; then
+    fan=$(echo "$fan" | xargs | tr -d ' %[]')
+    if [[ "$fan" == "NotSupported" || "$fan" == "N/A" || -z "$fan" ]]; then
+        fan="N/A"
+    else
+        fan="${fan}%"
+    fi
+    
+    util=$(echo "$util" | xargs | tr -d ' %[]')
+    if [[ -z "$util" || "$util" == "N/A" ]]; then
         util="N/A"
+    else
+        util="${util}%"
+    fi
+    
+    pcie_g_cur=$(echo "$pcie_g_cur" | xargs)
+    pcie_w_cur=$(echo "$pcie_w_cur" | xargs)
+    pcie_g_max=$(echo "$pcie_g_max" | xargs)
+    pcie_w_max=$(echo "$pcie_w_max" | xargs)
+    
+    if [[ -z "$pcie_g_cur" || "$pcie_g_cur" == "[Not Supported]" ]]; then
+        pcie_bw="N/A"
+    else
+        pcie_bw="Gen${pcie_g_cur}(${pcie_g_max}) x${pcie_w_cur}(${pcie_w_max})"
     fi
     
     short_bus_id=$(echo "$bus_id" | sed 's/^00000000:/0000:/')
     
+    numa_file="/sys/bus/pci/devices/${short_bus_id}/numa_node"
+    numa="N/A"
+    if [ -f "$numa_file" ]; then
+        numa_val=$(cat "$numa_file")
+        if [ "$numa_val" != "-1" ]; then
+            numa="$numa_val"
+        fi
+    fi
+
     slot=""
     current_dev="$short_bus_id"
     
-    # PCIe 트리를 거슬러 올라가며 dmidecode와 일치하는 부모 슬롯 찾기
     while [ -n "$current_dev" ]; do
         dmi_slot=$(echo "$dmi_info" | awk -v bus="$current_dev" '
             /Designation:/ { des=$0; sub(/^[ \t]+Designation: /, "", des) }
-            /Bus Address:/ && $0 ~ bus { print des }
+            /Bus Address:/ {
+                addr=$NF
+                if (tolower(addr) == tolower(bus) || tolower(addr) ~ tolower(bus)) {
+                    print des
+                }
+            }
         ' | head -n 1)
         
         if [ -n "$dmi_slot" ]; then
@@ -38,7 +67,6 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
             break
         fi
         
-        # 못 찾았으면 sysfs를 이용해 한 단계 위(부모 브릿지)로 이동
         dev_path="/sys/bus/pci/devices/$current_dev"
         if [ -e "$dev_path/.." ]; then
             parent_dev=$(basename $(readlink -f "$dev_path/.."))
@@ -51,7 +79,6 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
         fi
     done
 
-    # 최후의 sysfs 폴더 확인 (에러 유발했던 2>/dev/null 확실히 제거함!)
     if [ -z "$slot" ]; then
         for addr_file in /sys/bus/pci/slots/*/address; do
             if [ -f "$addr_file" ]; then
@@ -59,7 +86,7 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
                 if [[ "$short_bus_id" == *"$slot_addr"* ]]; then
                     found_slot=$(basename $(dirname "$addr_file"))
                     if [[ ! "$found_slot" == 255-* ]]; then
-                        slot="Slot $found_slot"
+                        slot="V-Slot $found_slot (PLX)"
                         break
                     fi
                 fi
@@ -68,15 +95,14 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
     fi
     
     if [ -z "$slot" ]; then
-        slot="N/A (Check Topology)"
+        fallback_slot=$((index + 1))
+        slot="PCIE$fallback_slot (Idx-Match)"
     fi
 
-    # 서버용 GPU(팬 없음)의 경우 [Not Supported]로 출력되어 표가 깨지는 것을 방지
-    if [[ "$fan" == "[Not Supported]" ]]; then
-        fan="N/A"
-    fi
-
-    # 온도, 팬 상태, 사용량(Util)을 포함하여 출력
-    printf "%-3s | %-20s | %-22s | %-16s | %-7s | %-7s | %-7s\n" "$index" "$slot" "$name" "$bus_id" "$temp" "$fan" "$util"
+    # 세로형(블록) 출력 포맷
+    echo "▶ [GPU $index] $name"
+    echo "  ├─ Slot & NUMA : $slot  (NUMA: $numa)"
+    echo "  ├─ PCIe & Bus  : $pcie_bw  |  $short_bus_id"
+    echo "  └─ Health      : Temp: ${temp}C  |  Fan: $fan  |  Util: $util"
+    echo "------------------------------------------------------------------"
 done
-echo "====================================================================================================================="
