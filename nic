@@ -1,0 +1,37 @@
+#!/bin/bash
+
+# 출력 포맷 지정 (헤더)
+echo "=================================================================================================="
+printf "%-12s | %-12s | %-10s | %s\n" "Interface" "PCI Address" "Link State" "Physical Chipset"
+echo "=================================================================================================="
+
+# /sys/class/net/ 디렉토리를 순회하며 정보 추출
+for iface_path in /sys/class/net/*; do
+    iface=$(basename "$iface_path")
+    
+    # loopback 인터페이스 및 물리적 디바이스 링크(device)가 없는 가상 인터페이스 제외
+    if [ "$iface" = "lo" ] || [ ! -e "$iface_path/device" ]; then
+        continue
+    fi
+
+    # PCI 주소 추출 (심볼릭 링크가 가리키는 최종 디렉토리 이름)
+    pci_addr=$(basename $(readlink "$iface_path/device"))
+    
+    # 링크 상태 (케이블 연결 여부) 확인
+    link_state=$(cat "$iface_path/operstate" 2>/dev/null)
+    [ -z "$link_state" ] && link_state="unknown"
+
+    # lspci로 칩셋 정보 추출 후 불필요한 앞부분(예: Ethernet controller:) 제거하여 깔끔하게 포매팅
+    if command -v lspci >/dev/null 2>&1; then
+        # '03:00.0 Ethernet controller: Intel...' 형식에서 PCI 주소와 분류명 제거
+        chipset=$(lspci -s "$pci_addr" | cut -d' ' -f2- | sed 's/^[A-Za-z ]*: //')
+        [ -z "$chipset" ] && chipset="Unknown or Non-PCI Device"
+    else
+        chipset="lspci command not found. Please install pciutils."
+    fi
+
+    # 테이블 행 출력
+    printf "%-12s | %-12s | %-10s | %s\n" "$iface" "$pci_addr" "$link_state" "$chipset"
+done
+
+echo "=================================================================================================="
