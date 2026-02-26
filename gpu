@@ -1,31 +1,32 @@
 #!/bin/bash
 
-echo "=================================================================="
-echo "                   GPU HARDWARE TOPOLOGY REPORT                   "
-echo "=================================================================="
+echo "====================================================================================================="
+printf "%-3s | %-18s | %-12s | %-18s | %-4s | %-15s | %-4s | %-4s | %-4s\n" "GPU" "Slot" "Bus-Id" "Model" "NUMA" "PCIe(Cur/Max)" "T(C)" "F(%)" "U(%)"
+echo "-----------------------------------------------------------------------------------------------------"
 
 dmi_info=$(dmidecode -t 9)
 
 nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilization.gpu,pcie.link.gen.current,pcie.link.width.current,pcie.link.gen.max,pcie.link.width.max --format=csv,noheader | while IFS=',' read -r index bus_id name temp fan util pcie_g_cur pcie_w_cur pcie_g_max pcie_w_max; do
     index=$(echo "$index" | xargs)
     bus_id=$(echo "$bus_id" | xargs | tr '[:upper:]' '[:lower:]')
-    name=$(echo "$name" | xargs)
+    
+    # 1. 모델명 다이어트 (NVIDIA, GeForce 등 불필요한 단어 제거 및 최대 18자로 제한)
+    name=$(echo "$name" | xargs | sed -e 's/NVIDIA //g' -e 's/GeForce //g' -e 's/ Server Edition//g' -e 's/ Blackwe.*//g')
+    name=${name:0:18}
+    
     temp=$(echo "$temp" | xargs)
     
     fan=$(echo "$fan" | xargs | tr -d ' %[]')
     if [[ "$fan" == "NotSupported" || "$fan" == "N/A" || -z "$fan" ]]; then
         fan="N/A"
-    else
-        fan="${fan}%"
     fi
     
     util=$(echo "$util" | xargs | tr -d ' %[]')
     if [[ -z "$util" || "$util" == "N/A" ]]; then
         util="N/A"
-    else
-        util="${util}%"
     fi
     
+    # 2. PCIe 배속 다이어트 (Gen을 G로 축약)
     pcie_g_cur=$(echo "$pcie_g_cur" | xargs)
     pcie_w_cur=$(echo "$pcie_w_cur" | xargs)
     pcie_g_max=$(echo "$pcie_g_max" | xargs)
@@ -34,10 +35,11 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
     if [[ -z "$pcie_g_cur" || "$pcie_g_cur" == "[Not Supported]" ]]; then
         pcie_bw="N/A"
     else
-        pcie_bw="Gen${pcie_g_cur}(${pcie_g_max}) x${pcie_w_cur}(${pcie_w_max})"
+        pcie_bw="G${pcie_g_cur}(${pcie_g_max}) x${pcie_w_cur}(${pcie_w_max})"
     fi
     
-    short_bus_id=$(echo "$bus_id" | sed 's/^00000000:/0000:/')
+    # 3. 버스 ID 다이어트 (앞의 쓸데없는 '00000000:' 도메인 제거)
+    short_bus_id=$(echo "$bus_id" | sed 's/^00000000://')
     
     numa_file="/sys/bus/pci/devices/${short_bus_id}/numa_node"
     numa="N/A"
@@ -86,7 +88,7 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
                 if [[ "$short_bus_id" == *"$slot_addr"* ]]; then
                     found_slot=$(basename $(dirname "$addr_file"))
                     if [[ ! "$found_slot" == 255-* ]]; then
-                        slot="V-Slot $found_slot (PLX)"
+                        slot="V-Slot $found_slot" # (PLX) 글자 제거로 다이어트
                         break
                     fi
                 fi
@@ -96,13 +98,9 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
     
     if [ -z "$slot" ]; then
         fallback_slot=$((index + 1))
-        slot="PCIE$fallback_slot (Idx-Match)"
+        slot="PCIE$fallback_slot (Idx)" # Match 글자 제거로 다이어트
     fi
 
-    # 세로형(블록) 출력 포맷
-    echo "▶ [GPU $index] $name"
-    echo "  ├─ Slot & NUMA : $slot  (NUMA: $numa)"
-    echo "  ├─ PCIe & Bus  : $pcie_bw  |  $short_bus_id"
-    echo "  └─ Health      : Temp: ${temp}C  |  Fan: $fan  |  Util: $util"
-    echo "------------------------------------------------------------------"
+    printf "%-3s | %-18s | %-12s | %-18s | %-4s | %-15s | %-4s | %-4s | %-4s\n" "$index" "$slot" "$short_bus_id" "$name" "$numa" "$pcie_bw" "$temp" "$fan" "$util"
 done
+echo "====================================================================================================="
