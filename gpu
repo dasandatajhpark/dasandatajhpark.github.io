@@ -1,8 +1,8 @@
 #!/bin/bash
 
-echo "====================================================================================================="
-printf "%-3s | %-18s | %-12s | %-18s | %-4s | %-15s | %-4s | %-4s | %-4s\n" "GPU" "Slot" "Bus-Id" "Model" "NUMA" "PCIe(Cur/Max)" "T(C)" "F(%)" "U(%)"
-echo "-----------------------------------------------------------------------------------------------------"
+echo "======================================================================================================"
+printf "%-3s | %-18s | %-8s | %-18s | %-4s | %-15s | %-4s | %-4s | %-4s\n" "GPU" "Slot" "Bus-Id" "Model" "NUMA" "PCIe(Cur/Max)" "T(C)" "F(%)" "U(%)"
+echo "------------------------------------------------------------------------------------------------------"
 
 dmi_info=$(dmidecode -t 9)
 
@@ -37,11 +37,11 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
         pcie_bw="G${pcie_g_cur}(${pcie_g_max}) x${pcie_w_cur}(${pcie_w_max})"
     fi
     
-    # [버그 수정 완료] 시스템 조회용(sys_bus_id)과 화면 출력용(display_bus_id)을 분리
+    # 시스템 조회용과 화면 출력용 분리
     sys_bus_id=$(echo "$bus_id" | sed 's/^00000000:/0000:/')
     display_bus_id=$(echo "$bus_id" | sed 's/^00000000://')
     
-    # NUMA Node 확인 (시스템 조회용 주소 사용)
+    # NUMA Node 확인
     numa_file="/sys/bus/pci/devices/${sys_bus_id}/numa_node"
     numa="N/A"
     if [ -f "$numa_file" ]; then
@@ -102,7 +102,6 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
         slot="PCIE$fallback_slot (Idx)"
     fi
 
-    # 화면에 찍을 때는 display_bus_id 출력
-    printf "%-3s | %-18s | %-12s | %-18s | %-4s | %-15s | %-4s | %-4s | %-4s\n" "$index" "$slot" "$display_bus_id" "$name" "$numa" "$pcie_bw" "$temp" "$fan" "$util"
+    printf "%-3s | %-18s | %-8s | %-18s | %-4s | %-15s | %-4s | %-4s | %-4s\n" "$index" "$slot" "$display_bus_id" "$name" "$numa" "$pcie_bw" "$temp" "$fan" "$util"
 done
-echo "====================================================================================================="
+echo "======================================================================================================"
