@@ -10,7 +10,7 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
     index=$(echo "$index" | xargs)
     bus_id=$(echo "$bus_id" | xargs | tr '[:upper:]' '[:lower:]')
     
-    # 1. 모델명 다이어트 (NVIDIA, GeForce 등 불필요한 단어 제거 및 최대 18자로 제한)
+    # 모델명 다이어트
     name=$(echo "$name" | xargs | sed -e 's/NVIDIA //g' -e 's/GeForce //g' -e 's/ Server Edition//g' -e 's/ Blackwe.*//g')
     name=${name:0:18}
     
@@ -26,7 +26,6 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
         util="N/A"
     fi
     
-    # 2. PCIe 배속 다이어트 (Gen을 G로 축약)
     pcie_g_cur=$(echo "$pcie_g_cur" | xargs)
     pcie_w_cur=$(echo "$pcie_w_cur" | xargs)
     pcie_g_max=$(echo "$pcie_g_max" | xargs)
@@ -38,10 +37,12 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
         pcie_bw="G${pcie_g_cur}(${pcie_g_max}) x${pcie_w_cur}(${pcie_w_max})"
     fi
     
-    # 3. 버스 ID 다이어트 (앞의 쓸데없는 '00000000:' 도메인 제거)
-    short_bus_id=$(echo "$bus_id" | sed 's/^00000000://')
+    # [버그 수정 완료] 시스템 조회용(sys_bus_id)과 화면 출력용(display_bus_id)을 분리
+    sys_bus_id=$(echo "$bus_id" | sed 's/^00000000:/0000:/')
+    display_bus_id=$(echo "$bus_id" | sed 's/^00000000://')
     
-    numa_file="/sys/bus/pci/devices/${short_bus_id}/numa_node"
+    # NUMA Node 확인 (시스템 조회용 주소 사용)
+    numa_file="/sys/bus/pci/devices/${sys_bus_id}/numa_node"
     numa="N/A"
     if [ -f "$numa_file" ]; then
         numa_val=$(cat "$numa_file")
@@ -51,7 +52,7 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
     fi
 
     slot=""
-    current_dev="$short_bus_id"
+    current_dev="$sys_bus_id"
     
     while [ -n "$current_dev" ]; do
         dmi_slot=$(echo "$dmi_info" | awk -v bus="$current_dev" '
@@ -85,10 +86,10 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
         for addr_file in /sys/bus/pci/slots/*/address; do
             if [ -f "$addr_file" ]; then
                 slot_addr=$(cat "$addr_file")
-                if [[ "$short_bus_id" == *"$slot_addr"* ]]; then
+                if [[ "$sys_bus_id" == *"$slot_addr"* ]]; then
                     found_slot=$(basename $(dirname "$addr_file"))
                     if [[ ! "$found_slot" == 255-* ]]; then
-                        slot="V-Slot $found_slot" # (PLX) 글자 제거로 다이어트
+                        slot="V-Slot $found_slot"
                         break
                     fi
                 fi
@@ -98,9 +99,10 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,temperature.gpu,fan.speed,utilizati
     
     if [ -z "$slot" ]; then
         fallback_slot=$((index + 1))
-        slot="PCIE$fallback_slot (Idx)" # Match 글자 제거로 다이어트
+        slot="PCIE$fallback_slot (Idx)"
     fi
 
-    printf "%-3s | %-18s | %-12s | %-18s | %-4s | %-15s | %-4s | %-4s | %-4s\n" "$index" "$slot" "$short_bus_id" "$name" "$numa" "$pcie_bw" "$temp" "$fan" "$util"
+    # 화면에 찍을 때는 display_bus_id 출력
+    printf "%-3s | %-18s | %-12s | %-18s | %-4s | %-15s | %-4s | %-4s | %-4s\n" "$index" "$slot" "$display_bus_id" "$name" "$numa" "$pcie_bw" "$temp" "$fan" "$util"
 done
 echo "====================================================================================================="
